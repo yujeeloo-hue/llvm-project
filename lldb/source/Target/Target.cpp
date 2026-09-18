@@ -5241,6 +5241,19 @@ void TargetProperties::SetPreloadSymbols(bool b) {
   SetPropertyAtIndex(idx, b);
 }
 
+bool TargetProperties::IsPDBModuleAllowed(const FileSpec &module_file) const {
+  Args allowlist;
+  if (!m_collection_sp->GetPropertyAtIndexAsArgs(ePropertyPDBModuleAllowlist,
+                                                  allowlist) ||
+      allowlist.GetArgumentCount() == 0)
+    return true;
+
+  const llvm::StringRef basename = module_file.GetFilename();
+  return llvm::any_of(allowlist, [&](const Args::ArgEntry &entry) {
+    return basename.equals_insensitive(entry.ref());
+  });
+}
+
 bool TargetProperties::GetDisableASLR() const {
   const uint32_t idx = ePropertyDisableASLR;
   return GetPropertyAtIndexAs<bool>(

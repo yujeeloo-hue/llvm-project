@@ -174,6 +174,12 @@ struct DAP final : public DAPTransport::MessageHandler {
   llvm::StringSet<> modules;
   /// @}
 
+  /// Lower-cased PE/COFF basenames allowed to expose PDB-backed symbol
+  /// details. Empty preserves upstream behavior.
+  llvm::StringSet<> pdb_module_allowlist;
+
+  bool IsPDBModuleAllowed(const lldb::SBModule &module) const;
+
   /// Number of lines of assembly code to show when no debug info is available.
   static constexpr uint32_t k_number_of_assembly_lines_for_nodebug = 32;
 

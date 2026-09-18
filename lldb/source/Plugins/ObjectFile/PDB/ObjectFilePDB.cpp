@@ -11,6 +11,7 @@
 #include "lldb/Core/ModuleSpec.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Section.h"
+#include "lldb/Target/Target.h"
 #include "lldb/Utility/StreamString.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/DebugInfo/PDB/Native/DbiStream.h"
@@ -97,6 +98,10 @@ ObjectFile *ObjectFilePDB::CreateInstance(const ModuleSP &module_sp,
                                           const FileSpec *file,
                                           offset_t file_offset,
                                           offset_t length) {
+  if (module_sp &&
+      !Target::GetGlobalProperties().IsPDBModuleAllowed(
+          module_sp->GetFileSpec()))
+    return nullptr;
   auto objfile_up = std::make_unique<ObjectFilePDB>(
       module_sp, extractor_sp, data_offset, file, file_offset, length);
   if (!objfile_up->initPDBFile())

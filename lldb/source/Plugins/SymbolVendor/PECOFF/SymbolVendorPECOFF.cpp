@@ -60,6 +60,12 @@ SymbolVendorPECOFF::CreateInstance(const lldb::ModuleSP &module_sp,
   if (!obj_file)
     return nullptr;
 
+  // Larry's DAP config installs this target-wide allowlist before target
+  // creation. Reject here, before reading CodeView paths or invoking SymStore.
+  if (!Target::GetGlobalProperties().IsPDBModuleAllowed(
+          module_sp->GetFileSpec()))
+    return nullptr;
+
   lldb_private::UUID uuid = obj_file->GetUUID();
   if (!uuid)
     return nullptr;

@@ -140,6 +140,9 @@ let Definition = "target", Path = "target" in {
   def PreloadSymbols: Property<"preload-symbols", "Boolean">,
     DefaultTrue,
     Desc<"Enable loading of symbol tables before they are needed.">;
+  def PDBModuleAllowlist: Property<"pdb-module-allowlist", "Array">,
+    ElementType<"String">,
+    Desc<"When non-empty, only PE/COFF modules whose case-insensitive basename is listed may locate or open PDB debug information.">;
   def DisableASLR: Property<"disable-aslr", "Boolean">,
     DefaultTrue,
     Desc<"Disable Address Space Layout Randomization (ASLR)">;

@@ -39,7 +39,8 @@ namespace lldb_dap {
 ///     definition outlined by the DAP protocol.
 std::optional<protocol::Module> CreateModule(const lldb::SBTarget &target,
                                              lldb::SBModule &module,
-                                             bool id_only = false);
+                                             bool id_only = false,
+                                             bool include_symbol_details = true);
 
 /// Create a "Source" JSON object as described in the debug adapter definition.
 ///

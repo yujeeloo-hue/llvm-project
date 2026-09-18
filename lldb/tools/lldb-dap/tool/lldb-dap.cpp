@@ -159,7 +159,8 @@ EXAMPLES:
 }
 
 static void PrintVersion() {
-  llvm::outs() << "lldb-dap: ";
+  llvm::outs() << "lldb-dap: 23.1.1-larry.1"
+                  " (capability: pdbModuleAllowlist)\nupstream: ";
   llvm::cl::PrintVersionMessage();
   llvm::outs() << "liblldb: " << lldb::SBDebugger::GetVersionString() << '\n';
 }

@@ -13,6 +13,7 @@
 #include "lldb/Symbol/CompileUnit.h"
 #include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Symbol/SymbolFile.h"
+#include "lldb/Target/Target.h"
 #include "lldb/Utility/Stream.h"
 
 using namespace lldb;
@@ -38,7 +39,9 @@ SymbolVendor *SymbolVendor::FindPlugin(const lldb::ModuleSP &module_sp,
   // the file representation for the module.
   ObjectFileSP sym_objfile_sp;
   FileSpec sym_spec = module_sp->GetSymbolFileFileSpec();
-  if (sym_spec && sym_spec != module_sp->GetObjectFile()->GetFileSpec()) {
+  if (sym_spec && sym_spec != module_sp->GetObjectFile()->GetFileSpec() &&
+      Target::GetGlobalProperties().IsPDBModuleAllowed(
+          module_sp->GetFileSpec())) {
     DataExtractorSP extractor_sp;
     offset_t data_offset = 0;
     sym_objfile_sp = ObjectFile::FindPlugin(

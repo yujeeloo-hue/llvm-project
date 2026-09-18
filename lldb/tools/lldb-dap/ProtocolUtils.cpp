@@ -96,7 +96,8 @@ std::string ConvertDebugInfoSizeToString(uint64_t debug_size) {
 
 std::optional<protocol::Module> CreateModule(const lldb::SBTarget &target,
                                              lldb::SBModule &module,
-                                             bool id_only) {
+                                             bool id_only,
+                                             bool include_symbol_details) {
   if (!target.IsValid() || !module.IsValid())
     return std::nullopt;
 
@@ -119,8 +120,12 @@ std::optional<protocol::Module> CreateModule(const lldb::SBTarget &target,
     p_module.path = std::string(path_buffer.data(), path_size);
   }
 
-  if (const uint32_t num_compile_units = module.GetNumCompileUnits();
-      num_compile_units > 0) {
+  if (!include_symbol_details) {
+    // GetNumCompileUnits() hydrates NativePDB. Do not call it for denied
+    // modules merely to serialize a DAP module event/request.
+    p_module.symbolStatus = "Symbols skipped by pdbModuleAllowlist.";
+  } else if (const uint32_t num_compile_units = module.GetNumCompileUnits();
+             num_compile_units > 0) {
     p_module.symbolStatus = "Symbols loaded.";
 
     p_module.debugInfoSizeBytes = GetDebugInfoSize(module);

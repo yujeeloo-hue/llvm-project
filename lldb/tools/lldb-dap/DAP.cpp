@@ -129,6 +129,14 @@ DAP::DAP(Log &log, const ReplMode default_repl_mode,
   RegisterRequests();
 }
 
+bool DAP::IsPDBModuleAllowed(const lldb::SBModule &module) const {
+  if (pdb_module_allowlist.empty())
+    return true;
+  const lldb::SBFileSpec file = module.GetFileSpec();
+  const char *filename = file.GetFilename();
+  return filename && pdb_module_allowlist.contains(llvm::StringRef(filename).lower());
+}
+
 void DAP::PopulateExceptionBreakpoints() {
   if (lldb::SBDebugger::SupportsLanguage(lldb::eLanguageTypeC_plus_plus)) {
     exception_breakpoints.emplace_back(*this, "cpp_catch", "C++ Catch",

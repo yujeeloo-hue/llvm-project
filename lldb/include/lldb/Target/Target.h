@@ -107,6 +107,10 @@ public:
 
   void SetPreloadSymbols(bool b);
 
+  /// Empty allowlist preserves upstream behavior. Matching is performed
+  /// case-insensitively against the module file basename on Windows.
+  bool IsPDBModuleAllowed(const FileSpec &module_file) const;
+
   bool GetDisableASLR() const;
 
   void SetDisableASLR(bool b);

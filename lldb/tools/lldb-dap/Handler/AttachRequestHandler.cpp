@@ -38,6 +38,19 @@ Error AttachRequestHandler::Run(const AttachRequestArguments &args) const {
     return err;
 
   dap.SetConfiguration(args.configuration, /*is_attach=*/true);
+  dap.pdb_module_allowlist.clear();
+  if (!args.pdbModuleAllowlist.empty()) {
+    std::string command = "settings set target.pdb-module-allowlist";
+    for (const String &module : args.pdbModuleAllowlist) {
+      llvm::StringRef name = llvm::StringRef(module).trim();
+      dap.pdb_module_allowlist.insert(name.lower());
+      command += " \"" + name.str() + "\"";
+    }
+    // Global target properties are cloned while CreateTarget runs. Execute
+    // this before all user init commands and before creating that target.
+    dap.configuration.initCommands.insert(
+        dap.configuration.initCommands.begin(), std::move(command));
+  }
   if (!args.coreFile.empty()) {
     dap.stop_at_entry = true;
     dap.is_live_session = false;

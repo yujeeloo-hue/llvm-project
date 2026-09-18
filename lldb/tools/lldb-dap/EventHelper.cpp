@@ -475,7 +475,8 @@ static void HandleTargetEvent(const lldb::SBEvent &event, Log &log) {
           lldb::SBTarget::GetModuleAtIndexFromEvent(i, event);
 
       std::optional<protocol::Module> p_module =
-          CreateModule(target, module, remove_module);
+          CreateModule(target, module, remove_module,
+                       dap->IsPDBModuleAllowed(module));
       if (!p_module)
         continue;
 

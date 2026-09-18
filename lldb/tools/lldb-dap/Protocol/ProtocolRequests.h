@@ -346,6 +346,10 @@ struct AttachRequestArguments {
   /// System process ID to attach to.
   lldb::pid_t pid = LLDB_INVALID_PROCESS_ID;
 
+  /// Case-insensitive PE/COFF module basenames that may load PDBs. An empty
+  /// list preserves upstream LLDB behavior.
+  std::vector<String> pdbModuleAllowlist;
+
   /// Wait for the process to launch.
   bool waitFor = false;
 

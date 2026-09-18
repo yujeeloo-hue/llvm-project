@@ -26,6 +26,7 @@
 #include "lldb/Symbol/TypeList.h"
 #include "lldb/Symbol/TypeMap.h"
 #include "lldb/Symbol/Variable.h"
+#include "lldb/Target/Target.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/RegularExpression.h"
@@ -235,6 +236,9 @@ SymbolFilePDB::~SymbolFilePDB() = default;
 uint32_t SymbolFilePDB::CalculateAbilities() {
   uint32_t abilities = 0;
   if (!m_objfile_sp)
+    return 0;
+  if (!Target::GetGlobalProperties().IsPDBModuleAllowed(
+          m_objfile_sp->GetModule()->GetFileSpec()))
     return 0;
 
   if (!m_session_up) {

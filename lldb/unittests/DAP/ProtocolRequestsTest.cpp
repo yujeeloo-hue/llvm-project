@@ -347,6 +347,26 @@ TEST(ProtocolRequestsTest, RestartArguments) {
   EXPECT_EQ(attach_args->pid, 123U);
 }
 
+TEST(ProtocolRequestsTest, AttachPDBModuleAllowlist) {
+  llvm::Expected<AttachRequestArguments> expected =
+      parse<AttachRequestArguments>(R"({
+        "pid": 123,
+        "pdbModuleAllowlist": [
+          "UnrealEditor-Game-Win64-DebugGame.dll",
+          "UnrealEditor-Plugin.dll"
+        ]
+      })");
+  ASSERT_THAT_EXPECTED(expected, llvm::Succeeded());
+  EXPECT_EQ(expected->pdbModuleAllowlist.size(), 2U);
+  EXPECT_EQ(expected->pdbModuleAllowlist[0],
+            "UnrealEditor-Game-Win64-DebugGame.dll");
+
+  EXPECT_THAT_EXPECTED(
+      parse<AttachRequestArguments>(
+          R"({"pid": 123, "pdbModuleAllowlist": ["C:\\Engine\\Bad.dll"]})"),
+      llvm::Failed());
+}
+
 TEST(ProtocolRequestsTest, StackTraceArguments) {
   llvm::Expected<StackTraceArguments> expected = parse<StackTraceArguments>(R"({
     "threadId": 42,

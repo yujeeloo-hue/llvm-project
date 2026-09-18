@@ -350,6 +350,8 @@ bool fromJSON(const json::Value &Params, AttachRequestArguments &ARA,
   bool success = O && fromJSON(Params, ARA.configuration, P) &&
                  O.mapOptional("attachCommands", ARA.attachCommands) &&
                  O.mapOptional("pid", ARA.pid) &&
+                 O.mapOptional("pdbModuleAllowlist",
+                               ARA.pdbModuleAllowlist) &&
                  O.mapOptional("waitFor", ARA.waitFor) &&
                  O.mapOptional("gdb-remote-port", ARA.gdbRemotePort) &&
                  O.mapOptional("gdb-remote-hostname", ARA.gdbRemoteHostname) &&
@@ -357,6 +359,14 @@ bool fromJSON(const json::Value &Params, AttachRequestArguments &ARA,
                  O.mapOptional("session", ARA.session);
   if (!success)
     return false;
+  for (const String &module : ARA.pdbModuleAllowlist) {
+    llvm::StringRef name = llvm::StringRef(module).trim();
+    if (name.empty() || name.contains('/') || name.contains('\\') ||
+        name.contains('"')) {
+      P.report("'pdbModuleAllowlist' entries must be non-empty basenames");
+      return false;
+    }
+  }
   // Validate that we have a well formed attach request.
   if (ARA.attachCommands.empty() && ARA.coreFile.empty() &&
       ARA.configuration.program.empty() && ARA.pid == LLDB_INVALID_PROCESS_ID &&

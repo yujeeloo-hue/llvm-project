@@ -22,6 +22,7 @@
 #include "lldb/Symbol/SymbolVendor.h"
 #include "lldb/Symbol/Variable.h"
 #include "lldb/Symbol/VariableList.h"
+#include "lldb/Target/Target.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 
@@ -123,6 +124,9 @@ findMatchingPDBFilePath(llvm::StringRef original_pdb_path,
 
 static std::unique_ptr<PDBFile>
 loadMatchingPDBFile(std::string exe_path, llvm::BumpPtrAllocator &allocator) {
+  if (!Target::GetGlobalProperties().IsPDBModuleAllowed(FileSpec(exe_path)))
+    return nullptr;
+
   // Try to find a matching PDB for an EXE.
   using namespace llvm::object;
   auto expected_binary = createBinary(exe_path);
@@ -387,8 +391,16 @@ uint32_t SymbolFileNativePDB::CalculateAbilities() {
     // Lazily load and match the PDB file, but only do this once.
     PDBFile *pdb_file;
     if (auto *pdb = llvm::dyn_cast<ObjectFilePDB>(m_objfile_sp.get())) {
+      if (!Target::GetGlobalProperties().IsPDBModuleAllowed(
+              m_objfile_sp->GetModule()->GetFileSpec()))
+        return 0;
       pdb_file = &pdb->GetPDBFile();
     } else {
+      // SymbolVendorPECOFF normally performs the first filter. Keep this
+      // fallback guard because NativePDB can also open a matching PDB directly.
+      if (!Target::GetGlobalProperties().IsPDBModuleAllowed(
+              m_objfile_sp->GetFileSpec()))
+        return 0;
       m_file_up = loadMatchingPDBFile(m_objfile_sp->GetFileSpec().GetPath(),
                                       m_allocator);
       pdb_file = m_file_up.get();
