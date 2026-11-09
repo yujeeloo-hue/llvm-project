@@ -1,9 +1,11 @@
 {
-  "version": "23.1.1-larry.1",
+  "version": "23.1.1-larry.3",
   "upstreamTag": "llvmorg-23.1.1",
   "llvmRevision": "6dfe1677ab8dffbc6ec13d53a1e0215d75147689",
   "capabilities": [
-    "pdbModuleAllowlist"
+    "pdbModuleAllowlist",
+    "loadModuleSymbols",
+    "deferredDebugEvents"
   ],
   "platform": "win32",
   "arch": "x64",

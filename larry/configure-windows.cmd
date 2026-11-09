@@ -1,23 +1,17 @@
 @echo off
 setlocal
 
-set "VS_VCVARS=%ProgramFiles%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
-if not exist "%VS_VCVARS%" (
-  echo Visual Studio 2022 Community C++ tools were not found. 1>&2
-  exit /b 1
-)
-call "%VS_VCVARS%" -vcvars_ver=14.38 || exit /b 1
+call "%~dp0env-windows.cmd" || exit /b 1
 
-set "NINJA=%ProgramFiles%\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
-if not exist "%NINJA%" (
-  echo Visual Studio Ninja was not found. 1>&2
-  exit /b 1
-)
+set "PYTHON_ARG="
+if defined LARRY_PYTHON set "PYTHON_ARG=-DPython3_EXECUTABLE=%LARRY_PYTHON%"
 
-cmake -S llvm -B build-release-14.38 -G Ninja ^
+cmake -S llvm -B "%LARRY_BUILD_DIR%" -G Ninja ^
   -DCMAKE_MAKE_PROGRAM="%NINJA%" ^
   -DCMAKE_BUILD_TYPE=Release ^
   -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL ^
+  -DCMAKE_C_FLAGS=/utf-8 ^
+  -DCMAKE_CXX_FLAGS=/utf-8 ^
   -DLLVM_ENABLE_PROJECTS="clang;lldb" ^
   -DLLVM_TARGETS_TO_BUILD=X86 ^
   -DLLVM_INCLUDE_TESTS=ON ^
@@ -35,5 +29,6 @@ cmake -S llvm -B build-release-14.38 -G Ninja ^
   -DLLDB_ENABLE_CURSES=OFF ^
   -DLLDB_ENABLE_LZMA=OFF ^
   -DLLDB_ENABLE_SWIG=OFF ^
-  -DLLDB_ENABLE_LIBEDIT=OFF
+  -DLLDB_ENABLE_LIBEDIT=OFF ^
+  %PYTHON_ARG%
 exit /b %ERRORLEVEL%

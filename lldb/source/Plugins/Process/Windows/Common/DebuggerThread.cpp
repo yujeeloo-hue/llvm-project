@@ -24,15 +24,20 @@
 #include "lldb/Utility/Predicate.h"
 #include "lldb/Utility/Status.h"
 
+#include "Plugins/Process/Windows/Common/LarryEventStats.h"
 #include "Plugins/Process/Windows/Common/ProcessWindowsLog.h"
 
 #include "lldb/Utility/LLDBLog.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ConvertUTF.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <chrono>
+#include <map>
 #include <optional>
+#include <vector>
 #include <pathcch.h>
 #include <psapi.h>
 
@@ -67,6 +72,122 @@ static void InitializeWaitForDebugEvent() {
     g_wait_for_debug_event = *s_wait_for_debug_event_ex;
   }
 }
+
+namespace {
+/// Aggregates how long each debug event kept the inferior suspended (from
+/// WaitForDebugEvent returning to ContinueDebugEvent) and appends a summary
+/// line every few seconds. Stops that break into the debugger are counted
+/// but not timed, since they include the time the user spends stopped.
+class DebugEventTimings {
+public:
+  using Clock = std::chrono::steady_clock;
+
+  void Record(DWORD code, Clock::duration held, bool stopped,
+              const std::string &detail) {
+    if (code >= kSlots)
+      code = 0;
+    Slot &slot = m_slots[code];
+    ++slot.count;
+    const uint64_t us =
+        std::chrono::duration_cast<std::chrono::microseconds>(held).count();
+    if (stopped) {
+      ++m_stops;
+      m_stop_us += us;
+      ++m_stop_sites[detail];
+      return;
+    }
+    slot.total_us += us;
+    m_total_us += us;
+    if (us > slot.max_us) {
+      slot.max_us = us;
+      slot.max_detail = detail;
+    }
+  }
+
+  void MaybeFlush(Clock::time_point now, bool force = false) {
+    if (m_window_start == Clock::time_point())
+      m_window_start = now;
+    const auto elapsed = now - m_window_start;
+    if (!force && elapsed < std::chrono::seconds(5))
+      return;
+    const double window_ms =
+        std::chrono::duration<double, std::milli>(elapsed).count();
+    std::string line = llvm::formatv(
+        "debug-events {0:F1}s: suspended {1:F1}ms ({2:F1}%), stops {3}",
+        window_ms / 1000.0, m_total_us / 1000.0,
+        window_ms > 0 ? 100.0 * (m_total_us / 1000.0) / window_ms : 0.0,
+        m_stops).str();
+    if (m_stops > 0) {
+      line += llvm::formatv(" (held {0:F1}ms", m_stop_us / 1000.0).str();
+      std::vector<std::pair<std::string, uint64_t>> sites(
+          m_stop_sites.begin(), m_stop_sites.end());
+      llvm::sort(sites, [](const auto &a, const auto &b) {
+        return a.second > b.second;
+      });
+      for (size_t i = 0; i < sites.size() && i < 3; ++i)
+        line += llvm::formatv("; {0} x{1}", sites[i].first, sites[i].second)
+                    .str();
+      line += ")";
+    }
+    for (DWORD code = 0; code < kSlots; ++code) {
+      const Slot &slot = m_slots[code];
+      if (slot.count == 0)
+        continue;
+      line += llvm::formatv(" | {0} n={1} total={2:F1}ms max={3:F2}ms",
+                            Name(code), slot.count, slot.total_us / 1000.0,
+                            slot.max_us / 1000.0)
+                  .str();
+      if (!slot.max_detail.empty())
+        line += " (" + slot.max_detail + ")";
+    }
+    if (m_total_us > 0 || m_stops > 0)
+      larry::AppendEventStatsLine(line);
+    *this = DebugEventTimings();
+    m_window_start = now;
+  }
+
+private:
+  static constexpr DWORD kSlots = RIP_EVENT + 1;
+
+  static const char *Name(DWORD code) {
+    switch (code) {
+    case EXCEPTION_DEBUG_EVENT:
+      return "exception";
+    case CREATE_THREAD_DEBUG_EVENT:
+      return "thread+";
+    case CREATE_PROCESS_DEBUG_EVENT:
+      return "process+";
+    case EXIT_THREAD_DEBUG_EVENT:
+      return "thread-";
+    case EXIT_PROCESS_DEBUG_EVENT:
+      return "process-";
+    case LOAD_DLL_DEBUG_EVENT:
+      return "dll+";
+    case UNLOAD_DLL_DEBUG_EVENT:
+      return "dll-";
+    case OUTPUT_DEBUG_STRING_EVENT:
+      return "ods";
+    case RIP_EVENT:
+      return "rip";
+    default:
+      return "other";
+    }
+  }
+
+  struct Slot {
+    uint64_t count = 0;
+    uint64_t total_us = 0;
+    uint64_t max_us = 0;
+    std::string max_detail;
+  };
+  Slot m_slots[kSlots];
+  uint64_t m_total_us = 0;
+  uint64_t m_stops = 0;
+  uint64_t m_stop_us = 0;
+  std::map<std::string, uint64_t> m_stop_sites;
+  Clock::time_point m_window_start;
+};
+} // namespace
 
 DebuggerThread::DebuggerThread(DebugDelegateSP debug_delegate)
     : m_debug_delegate(debug_delegate), m_pid_to_detach(0),
@@ -268,11 +389,16 @@ void DebuggerThread::DebugLoop() {
   Log *log = GetLog(WindowsLog::Event);
   DEBUG_EVENT dbe = {};
   bool should_debug = true;
+  const bool record_timings = larry::EventStatsEnabled();
+  DebugEventTimings timings;
   LLDB_LOG_VERBOSE(log, "Entering WaitForDebugEventEx loop");
   while (should_debug) {
     LLDB_LOG_VERBOSE(log, "Calling WaitForDebugEvent");
     BOOL wait_result = g_wait_for_debug_event(&dbe, INFINITE);
     if (wait_result) {
+      const auto event_start = DebugEventTimings::Clock::now();
+      m_event_stopped = false;
+      m_event_detail.clear();
       DWORD continue_status = DBG_CONTINUE;
       bool shutting_down = m_is_shutting_down;
       switch (dbe.dwDebugEventCode) {
@@ -329,6 +455,13 @@ void DebuggerThread::DebugLoop() {
 
       ::ContinueDebugEvent(dbe.dwProcessId, dbe.dwThreadId, continue_status);
 
+      if (record_timings) {
+        const auto event_end = DebugEventTimings::Clock::now();
+        timings.Record(dbe.dwDebugEventCode, event_end - event_start,
+                       m_event_stopped, m_event_detail);
+        timings.MaybeFlush(event_end);
+      }
+
       // We have to DebugActiveProcessStop after ContinueDebugEvent, otherwise
       // the target process will crash
       if (shutting_down) {
@@ -377,6 +510,8 @@ void DebuggerThread::DebugLoop() {
       should_debug = false;
     }
   }
+  if (record_timings)
+    timings.MaybeFlush(DebugEventTimings::Clock::now(), /*force=*/true);
   FreeProcessHandles();
 
   LLDB_LOG(log, "WaitForDebugEventEx loop completed, exiting.");
@@ -409,6 +544,13 @@ DebuggerThread::HandleExceptionEvent(const EXCEPTION_DEBUG_INFO &info,
 
   ExceptionResult result =
       m_debug_delegate->OnDebugException(first_chance, *m_active_exception);
+  m_event_stopped = result == ExceptionResult::BreakInDebugger;
+  m_event_detail =
+      llvm::formatv("{0:x}@{1:x}{2}", info.ExceptionRecord.ExceptionCode,
+                    reinterpret_cast<uintptr_t>(
+                        info.ExceptionRecord.ExceptionAddress),
+                    first_chance ? "" : " second-chance")
+          .str();
   m_exception_pred.SetValue(result, eBroadcastNever);
 
   LLDB_LOG(log, "waiting for ExceptionPred != BreakInDebugger");
@@ -720,6 +862,7 @@ DebuggerThread::HandleLoadDllEvent(const LOAD_DLL_DEBUG_INFO &info,
 
     LLDB_LOG(log, "Inferior {0} - DLL '{1}' loaded at address {2:x}...",
              m_process.GetProcessId(), path, info.lpBaseOfDll);
+    m_event_detail = file_spec.GetFilename().str();
 
     m_dll_event_pred.SetValue(false, eBroadcastNever);
     action = m_debug_delegate->OnLoadDll(module_spec, load_addr, thread_id);

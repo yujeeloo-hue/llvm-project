@@ -43,12 +43,17 @@
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/ErrorExtras.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include <algorithm>
+#include <chrono>
 
 #include "DebuggerThread.h"
 #include "ExceptionRecord.h"
 #include "ForwardDecl.h"
+#include "LarryEventStats.h"
 #include "LocalDebugDelegate.h"
 #include "ProcessWindowsLog.h"
 #include "TargetThreadWindows.h"
@@ -134,7 +139,105 @@ ProcessWindows::ProcessWindows(lldb::TargetSP target_sp,
           RegisterContextWindows::GetNumHardwareBreakpointSlots(),
           LLDB_INVALID_BREAK_ID) {}
 
-ProcessWindows::~ProcessWindows() = default;
+ProcessWindows::~ProcessWindows() { m_deferred.Stop(/*run_pending=*/false); }
+
+void ProcessWindows::DeferredWork::Enqueue(std::function<void()> work) {
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_stopped) {
+      if (m_worker_id == std::thread::id()) {
+        m_thread = std::thread([this] { Run(); });
+        m_worker_id = m_thread.get_id();
+      }
+      m_queue.push_back(std::move(work));
+      m_work_cv.notify_one();
+      return;
+    }
+  }
+  work();
+}
+
+void ProcessWindows::DeferredWork::Flush() {
+  std::unique_lock<std::mutex> lock(m_mutex);
+  if (std::this_thread::get_id() == m_worker_id)
+    return;
+  m_idle_cv.wait(lock, [this] { return m_queue.empty() && !m_busy; });
+}
+
+void ProcessWindows::DeferredWork::Stop(bool run_pending) {
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!run_pending)
+      m_queue.clear();
+    m_stopped = true;
+    m_work_cv.notify_one();
+    if (std::this_thread::get_id() == m_worker_id)
+      return;
+  }
+  std::lock_guard<std::mutex> join_lock(m_join_mutex);
+  if (m_thread.joinable())
+    m_thread.join();
+}
+
+void ProcessWindows::DeferredWork::Run() {
+  llvm::set_thread_name("lldb.plugin.process-windows.deferred");
+  const bool record_timings = larry::EventStatsEnabled();
+  auto window_start = std::chrono::steady_clock::now();
+  uint64_t items = 0, busy_us = 0, max_us = 0;
+  size_t max_backlog = 0;
+
+  std::unique_lock<std::mutex> lock(m_mutex);
+  while (true) {
+    m_work_cv.wait(lock, [this] { return m_stopped || !m_queue.empty(); });
+    if (m_queue.empty())
+      break;
+    max_backlog = std::max(max_backlog, m_queue.size());
+    std::function<void()> work = std::move(m_queue.front());
+    m_queue.pop_front();
+    m_busy = true;
+    lock.unlock();
+
+    const auto start = std::chrono::steady_clock::now();
+    work();
+    const auto end = std::chrono::steady_clock::now();
+
+    if (record_timings) {
+      const uint64_t us =
+          std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+              .count();
+      ++items;
+      busy_us += us;
+      max_us = std::max(max_us, us);
+      if (end - window_start >= std::chrono::seconds(5)) {
+        larry::AppendEventStatsLine(
+            llvm::formatv("deferred-work: items={0} busy={1:F1}ms "
+                          "max={2:F2}ms max-backlog={3}",
+                          items, busy_us / 1000.0, max_us / 1000.0,
+                          max_backlog)
+                .str());
+        window_start = end;
+        items = busy_us = max_us = 0;
+        max_backlog = 0;
+      }
+    }
+
+    lock.lock();
+    m_busy = false;
+    if (m_queue.empty())
+      m_idle_cv.notify_all();
+  }
+  m_idle_cv.notify_all();
+}
+
+bool ProcessWindows::ShouldDeferModuleLoad(
+    const ModuleSpec &module_spec) const {
+  // Allowlisted modules are the only ones with PDBs, so they are the only
+  // ones where a file/line breakpoint can resolve; they load synchronously so
+  // those breakpoints are in place before the module's code runs. An empty
+  // allowlist allows everything and keeps upstream (synchronous) behavior.
+  return !Target::GetGlobalProperties().IsPDBModuleAllowed(
+      module_spec.GetFileSpec());
+}
 
 Status ProcessWindows::EnableBreakpointSite(BreakpointSite *bp_site) {
   if (bp_site->HardwareRequired())
@@ -163,6 +266,7 @@ Status ProcessWindows::DisableBreakpointSite(BreakpointSite *bp_site) {
 }
 
 Status ProcessWindows::DoDetach(bool keep_stopped) {
+  m_deferred.Stop(/*run_pending=*/true);
   Status error;
   Log *log = GetLog(WindowsLog::Process);
   StateType private_state = GetPrivateState();
@@ -295,6 +399,7 @@ Status ProcessWindows::DoResume(RunDirection direction) {
 }
 
 Status ProcessWindows::DoDestroy() {
+  m_deferred.Stop(/*run_pending=*/false);
   StateType private_state = GetPrivateState();
   return DestroyProcess(private_state);
 }
@@ -599,6 +704,8 @@ void ProcessWindows::OnExitProcess(uint32_t exit_code) {
   Log *log = GetLog(WindowsLog::Process);
   LLDB_LOG(log, "Process {0} exited with code {1}", GetID(), exit_code);
 
+  m_deferred.Stop(/*run_pending=*/true);
+
   if (m_pty) {
     DrainProcessStdout();
     m_pty->SetStopping(true);
@@ -696,6 +803,14 @@ ExceptionResult
 ProcessWindows::OnDebugException(bool first_chance,
                                  const ExceptionRecord &record) {
   Log *log = GetLog(WindowsLog::Exception);
+
+  // Deferred module loads and debug output must land before a stop is
+  // reported. Flush before taking m_mutex: queued work may need it.
+  const DWORD code = record.GetExceptionValue();
+  if (!first_chance || code == EXCEPTION_BREAKPOINT ||
+      code == EXCEPTION_SINGLE_STEP)
+    m_deferred.Flush();
+
   llvm::sys::ScopedLock lock(m_mutex);
 
   // FIXME: Without this check, occasionally when running the test suite there
@@ -824,15 +939,23 @@ void ProcessWindows::OnExitThread(lldb::tid_t thread_id, uint32_t exit_code) {
 DllEventAction ProcessWindows::OnLoadDll(const ModuleSpec &module_spec,
                                          lldb::addr_t module_addr,
                                          lldb::tid_t thread_id) {
-  if (auto dyld = GetDynamicLoader())
-    dyld->OnLoadModule(nullptr, module_spec, module_addr);
+  m_deferred.Enqueue([this, module_spec, module_addr] {
+    if (auto dyld = GetDynamicLoader())
+      dyld->OnLoadModule(nullptr, module_spec, module_addr);
+  });
+  // Running a synchronous load through the queue keeps it ordered after any
+  // deferred unload at the same address.
+  if (!ShouldDeferModuleLoad(module_spec))
+    m_deferred.Flush();
   return DllEventAction::ContinueDebugLoop;
 }
 
 DllEventAction ProcessWindows::OnUnloadDll(lldb::addr_t module_addr,
                                            lldb::tid_t thread_id) {
-  if (auto dyld = GetDynamicLoader())
-    dyld->OnUnloadModule(module_addr);
+  m_deferred.Enqueue([this, module_addr] {
+    if (auto dyld = GetDynamicLoader())
+      dyld->OnUnloadModule(module_addr);
+  });
   return DllEventAction::ContinueDebugLoop;
 }
 
@@ -865,9 +988,13 @@ void ProcessWindows::OnDebugString(lldb::addr_t debug_string_addr,
       return;
     }
 
-    AppendSTDOUT(out.data(), out.size());
+    m_deferred.Enqueue([this, out = std::move(out)] {
+      AppendSTDOUT(out.data(), out.size());
+    });
   } else {
-    AppendSTDOUT(buffer.data(), buffer.size());
+    m_deferred.Enqueue([this, out = std::string(buffer.data(), buffer.size())] {
+      AppendSTDOUT(out.data(), out.size());
+    });
   }
 }
 

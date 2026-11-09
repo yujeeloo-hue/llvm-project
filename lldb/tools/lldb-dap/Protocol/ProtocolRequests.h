@@ -1056,6 +1056,30 @@ struct ModuleSymbolsResponseBody {
 };
 llvm::json::Value toJSON(const ModuleSymbolsResponseBody &);
 
+/// Arguments for the Larry `larry/loadModuleSymbols` request: hydrate the PDB
+/// of one module skipped by `pdbModuleAllowlist`. The module is resolved from
+/// `frameId`, then `moduleId` (UUID), then `moduleName` (basename or stem).
+struct LoadModuleSymbolsArguments {
+  std::optional<uint64_t> frameId;
+  String moduleId;
+  String moduleName;
+};
+bool fromJSON(const llvm::json::Value &, LoadModuleSymbolsArguments &,
+              llvm::json::Path);
+
+/// Response to `larry/loadModuleSymbols`.
+struct LoadModuleSymbolsResponseBody {
+  /// Basename of the resolved module.
+  String moduleName;
+  /// A PDB was attached by this request.
+  bool loaded = false;
+  /// The module already had its PDB; nothing was reloaded.
+  bool alreadyLoaded = false;
+  String symbolStatus;
+  String symbolFilePath;
+};
+llvm::json::Value toJSON(const LoadModuleSymbolsResponseBody &);
+
 struct ExceptionInfoArguments {
   /// Thread for which exception information should be retrieved.
   lldb::tid_t threadId = LLDB_INVALID_THREAD_ID;

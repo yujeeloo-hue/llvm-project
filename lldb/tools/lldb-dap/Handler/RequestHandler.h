@@ -632,6 +632,17 @@ public:
   Run(const protocol::ModuleSymbolsArguments &args) const override;
 };
 
+class LoadModuleSymbolsRequestHandler
+    : public RequestHandler<
+          protocol::LoadModuleSymbolsArguments,
+          llvm::Expected<protocol::LoadModuleSymbolsResponseBody>> {
+public:
+  using RequestHandler::RequestHandler;
+  static llvm::StringLiteral GetCommand() { return "larry/loadModuleSymbols"; }
+  llvm::Expected<protocol::LoadModuleSymbolsResponseBody>
+  Run(const protocol::LoadModuleSymbolsArguments &args) const override;
+};
+
 class TestGetTargetBreakpointsRequestHandler
     : public RequestHandler<
           protocol::TestGetTargetBreakpointsArguments,

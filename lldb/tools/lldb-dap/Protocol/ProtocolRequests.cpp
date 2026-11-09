@@ -691,6 +691,25 @@ llvm::json::Value toJSON(const ModuleSymbolsResponseBody &DGMSR) {
   return result;
 }
 
+bool fromJSON(const llvm::json::Value &Params,
+              LoadModuleSymbolsArguments &Args, llvm::json::Path P) {
+  json::ObjectMapper O(Params, P);
+  return O && O.mapOptional("frameId", Args.frameId) &&
+         O.mapOptional("moduleId", Args.moduleId) &&
+         O.mapOptional("moduleName", Args.moduleName);
+}
+
+llvm::json::Value toJSON(const LoadModuleSymbolsResponseBody &Body) {
+  json::Object result{{"moduleName", Body.moduleName},
+                      {"loaded", Body.loaded},
+                      {"alreadyLoaded", Body.alreadyLoaded}};
+  if (!Body.symbolStatus.empty())
+    result.insert({"symbolStatus", Body.symbolStatus});
+  if (!Body.symbolFilePath.empty())
+    result.insert({"symbolFilePath", Body.symbolFilePath});
+  return result;
+}
+
 bool fromJSON(const json::Value &Params, ExceptionInfoArguments &Args,
               json::Path Path) {
   json::ObjectMapper O(Params, Path);

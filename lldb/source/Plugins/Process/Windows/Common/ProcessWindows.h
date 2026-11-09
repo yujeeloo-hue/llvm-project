@@ -17,6 +17,12 @@
 #include "Plugins/DynamicLoader/Windows-DYLD/DynamicLoaderWindowsDYLD.h"
 #include "ProcessDebugger.h"
 
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <mutex>
+#include <thread>
+
 namespace lldb_private {
 
 class HostProcess;
@@ -123,6 +129,39 @@ protected:
                                MemoryRegionInfo &info) override;
 
 private:
+  /// Runs debug-event bookkeeping that does not need the inferior suspended
+  /// (module loads/unloads outside the PDB allowlist, debug-string output) on
+  /// a worker thread, so the debugger thread can ContinueDebugEvent right
+  /// away. Items run in order, one at a time.
+  class DeferredWork {
+  public:
+    ~DeferredWork() { Stop(/*run_pending=*/false); }
+
+    /// Runs `work` inline once the queue has been stopped.
+    void Enqueue(std::function<void()> work);
+    /// Blocks until every queued item has run. Must not be called while
+    /// holding a lock that queued work may take (e.g. the process m_mutex).
+    void Flush();
+    void Stop(bool run_pending);
+
+  private:
+    void Run();
+
+    std::mutex m_mutex;
+    std::condition_variable m_work_cv;
+    std::condition_variable m_idle_cv;
+    std::deque<std::function<void()>> m_queue;
+    bool m_busy = false;
+    bool m_stopped = false;
+    std::thread::id m_worker_id;
+    std::mutex m_join_mutex;
+    std::thread m_thread;
+  };
+
+  bool ShouldDeferModuleLoad(const ModuleSpec &module_spec) const;
+
+  DeferredWork m_deferred;
+
   struct WatchpointInfo {
     uint32_t slot_id;
     lldb::addr_t address;

@@ -1,8 +1,12 @@
 $ErrorActionPreference = "Stop"
 
 $repo = Split-Path -Parent $PSScriptRoot
-$build = Join-Path $repo "build-release-14.38"
-$version = "23.1.1-larry.1"
+$buildDir = $env:LARRY_BUILD_DIR
+if (-not $buildDir) {
+  $buildDir = if (Test-Path (Join-Path $repo "build-release-14.38")) { "build-release-14.38" } else { "build-release" }
+}
+$build = Join-Path $repo $buildDir
+$version = (Get-Content (Join-Path $PSScriptRoot "VERSION.json") -Raw | ConvertFrom-Json).version
 $artifactDir = Join-Path $repo "artifacts"
 $stage = Join-Path $artifactDir "lldb-dap-$version-win-x64"
 $zipPath = "$stage.zip"

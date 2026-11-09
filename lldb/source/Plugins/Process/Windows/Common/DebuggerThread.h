@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <memory>
+#include <string>
 
 #include "ForwardDecl.h"
 #include "lldb/Host/HostProcess.h"
@@ -99,6 +100,11 @@ private:
   // Indicates we've detached from the inferior process and the debug loop can
   // exit.
   bool m_detached = false;
+
+  // Per-event facts for the LARRY_LLDB_EVENT_STATS timing summary; only
+  // touched on the debugger thread.
+  bool m_event_stopped = false;
+  std::string m_event_detail;
 
   lldb::thread_result_t
   DebuggerThreadLaunchRoutine(const ProcessLaunchInfo &launch_info);
