@@ -35,8 +35,9 @@ powershell -ExecutionPolicy Bypass -File larry\package-windows.ps1
 The build is Release, x64 host / X86 target only, `/MD`, `/utf-8`, without
 Python, DIA, Lua, libxml2, curses, editline, LZMA, zlib, or zstd. Artifacts
 are written to `artifacts/` with a SHA-256 sidecar. The archive contains the
-adapter, LLDB runtime/server, Clang resource headers, `VERSION.json`, and the
-LLVM license. It does not bundle the VC++ runtime DLLs.
+adapter, LLDB runtime/server, Clang resource headers, `VERSION.json`, the
+LLVM license, and the app-local VC++ runtime (`msvcp140.dll`,
+`vcruntime140.dll`, `vcruntime140_1.dll`).
 
 `build*` and `artifacts/` stay untracked. LLVM compilation is separate from
 Larry Agent application CI. The zip consumed by Larry Agent is published from

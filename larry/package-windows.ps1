@@ -24,6 +24,34 @@ foreach ($name in $required) {
   Copy-Item $source (Join-Path $stage "bin\$name")
 }
 
+# App-local VC++ runtime. The binaries import these three; the Universal CRT
+# (api-ms-win-crt-*) stays with Windows 10+. Newest redist under the same VS
+# install is a superset of the toolset that linked the build.
+$vsRoot = $env:LARRY_VS_ROOT
+if (-not $vsRoot) {
+  $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+  $vsRoot = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1
+}
+if (-not $vsRoot) { throw "Visual Studio with the C++ tools was not found." }
+$crtDir = $null
+$redistDirs = Get-ChildItem (Join-Path $vsRoot "VC\Redist\MSVC") -Directory |
+  Where-Object { $_.Name -match '^\d+\.\d+\.\d+' } |
+  Sort-Object { [version]$_.Name } -Descending
+foreach ($dir in $redistDirs) {
+  $candidate = Get-ChildItem (Join-Path $dir.FullName "x64") -Directory -Filter "Microsoft.VC*.CRT" |
+    Select-Object -First 1
+  if ($candidate -and (Test-Path (Join-Path $candidate.FullName "vcruntime140.dll"))) {
+    $crtDir = $candidate.FullName
+    break
+  }
+}
+if (-not $crtDir) { throw "VC++ redistributable CRT was not found under $vsRoot" }
+foreach ($name in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+  $source = Join-Path $crtDir $name
+  if (-not (Test-Path $source)) { throw "Required VC++ runtime not found: $source" }
+  Copy-Item $source (Join-Path $stage "bin\$name")
+}
+
 $clangResource = Join-Path $build "lib\clang\23\include"
 if (Test-Path $clangResource) {
   $resourceTarget = Join-Path $stage "lib\clang\23\include"
