@@ -213,6 +213,13 @@ static void SendStoppedEvent(DAP &dap, lldb::SBThread &thread, bool on_entry,
       body.text = llvm::formatv("data breakpoint {0}", bp_id).str();
     } break;
     case lldb::eStopReasonSignal:
+      // A SIGSTOP (signo 19) stop is LLDB's own async interrupt - the
+      // Windows native plugin uses it for its DebugBreakProcess halt
+      // injection. Clients must see the stop they requested as a pause.
+      body.reason = thread.GetStopReasonDataAtIndex(0) == 19
+                        ? protocol::eStoppedReasonPause
+                        : protocol::eStoppedReasonException;
+      break;
     case lldb::eStopReasonException:
     case lldb::eStopReasonInstrumentation:
       body.reason = protocol::eStoppedReasonException;

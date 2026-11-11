@@ -346,6 +346,11 @@ Status ProcessWindows::DoResume(RunDirection direction) {
   Log *log = GetLog(WindowsLog::Process);
   llvm::sys::ScopedLock lock(m_mutex);
 
+  // The halt injection stop (if any) has been classified by now; make sure
+  // a stale thread id never misclassifies a later __debugbreak() as an
+  // interrupt.
+  m_halt_injection_tid = LLDB_INVALID_THREAD_ID;
+
   if (direction == RunDirection::eRunReverse) {
     return Status::FromErrorStringWithFormatv(
         "{0} does not support reverse execution of processes", GetPluginName());
@@ -547,6 +552,31 @@ void ProcessWindows::RefreshStateAfterStop() {
     } else {
       // The thread hit a hard-coded breakpoint like an `int 3` or
       // `__debugbreak()`.
+      if (m_halt_injection_tid != LLDB_INVALID_THREAD_ID &&
+          m_halt_injection_tid == active_exception->GetThreadID()) {
+        // Our own DebugBreakProcess() injection from DoHalt(). Report the
+        // stop as a user interrupt so clients (e.g. DAP) classify it as
+        // the pause they requested rather than an exception.
+        m_halt_injection_tid = LLDB_INVALID_THREAD_ID;
+        // The halt stops the whole process; attribute the interrupt to the
+        // initial (main) thread instead of the transient injection thread
+        // so clients focus a meaningful stack (e.g. a game's game thread).
+        ThreadSP interrupt_thread =
+            m_initial_tid != LLDB_INVALID_THREAD_ID
+                ? m_thread_list.FindThreadByID(m_initial_tid)
+                : nullptr;
+        if (!interrupt_thread)
+          interrupt_thread = stop_thread;
+        stop_info = StopInfo::CreateStopReasonWithInterrupt(
+            *interrupt_thread, /*signo=*/19 /* SIGSTOP */, "interrupt");
+        interrupt_thread->SetStopInfo(stop_info);
+        m_thread_list.SetSelectedThreadByID(interrupt_thread->GetID());
+        LLDB_LOG(log,
+                 "halt injection breakpoint at address {0:x}; reporting "
+                 "the stop as an interrupt on thread {1:x}",
+                 pc, interrupt_thread->GetID());
+        return;
+      }
       LLDB_LOG(log,
                "No breakpoint site matches for this thread. __debugbreak()?  "
                "Creating stop info with the exception.");
@@ -796,6 +826,7 @@ void ProcessWindows::OnDebuggerConnected(lldb::addr_t image_base) {
   tid_t id = host_main_thread.GetNativeThread().GetThreadId();
   main_thread->SetID(id);
 
+  m_initial_tid = id;
   m_session_data->m_new_threads[id] = main_thread;
 }
 
@@ -841,6 +872,10 @@ ProcessWindows::OnDebugException(bool first_chance,
     const lldb::addr_t bp_addr = record.GetExceptionAddress();
     if (m_pending_halt) {
       m_pending_halt = false;
+      // This breakpoint is our own DebugBreakProcess() injection from
+      // DoHalt(). Remember the thread so RefreshStateAfterStop() reports
+      // the stop as a user interrupt ("pause"), not an exception.
+      m_halt_injection_tid = record.GetThreadID();
     } else if (m_expecting_loader_int3 && first_chance &&
                m_session_data->m_initial_stop_received &&
                !GetBreakpointSiteList().FindByAddress(bp_addr) &&

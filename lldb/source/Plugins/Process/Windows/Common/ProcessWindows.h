@@ -174,6 +174,16 @@ private:
   std::shared_ptr<PTY> m_pty;
   bool m_pending_halt = false;
   bool m_expecting_loader_int3 = false;
+  /// Thread that received our DebugBreakProcess() halt injection. Set by
+  /// OnDebugException() when it consumes m_pending_halt, so that
+  /// RefreshStateAfterStop() can report the stop as a user interrupt
+  /// instead of a bare breakpoint exception.
+  lldb::tid_t m_halt_injection_tid = LLDB_INVALID_THREAD_ID;
+  /// The process's initial (main) thread, registered from
+  /// CREATE_PROCESS_DEBUG_EVENT in OnDebuggerConnected(). Halt stops are
+  /// attributed to it (not the transient injection thread) so clients
+  /// focus a meaningful stack.
+  lldb::tid_t m_initial_tid = LLDB_INVALID_THREAD_ID;
 };
 } // namespace lldb_private
 
